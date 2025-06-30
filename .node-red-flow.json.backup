@@ -1,0 +1,139 @@
+[
+    {
+        "id": "serra-flow",
+        "type": "tab",
+        "label": "Serra Digitale",
+        "disabled": false,
+        "info": "Flow per la gestione della serra digitale"
+    },
+    {
+        "id": "ws-in",
+        "type": "websocket in",
+        "z": "serra-flow",
+        "name": "WebSocket Input",
+        "server": "ws-server",
+        "client": "",
+        "x": 130,
+        "y": 120,
+        "wires": [["process-request"]]
+    },
+    {
+        "id": "process-request",
+        "type": "function",
+        "z": "serra-flow",
+        "name": "Process Request",
+        "func": "// Log incoming message for debugging\nnode.warn('Received message: ' + JSON.stringify(msg));\n\n// Try to parse the payload if it's a string\nlet payload = msg.payload;\nif (typeof payload === 'string') {\n    try {\n        payload = JSON.parse(payload);\n    } catch(e) {\n        node.error('Failed to parse payload: ' + e.message);\n    }\n}\n\n// Check both direct type and payload.type\nif (payload.type === 'request_sensor_data' || \n    (payload.payload && payload.payload.type === 'request_sensor_data')) {\n    return [msg, null];\n} else {\n    return [null, msg];\n}",
+        "outputs": 2,
+        "x": 300,
+        "y": 120,
+        "wires": [["get-sensor-data"], ["handle-other"]]
+    },
+    {
+        "id": "get-sensor-data",
+        "type": "function",
+        "z": "serra-flow",
+        "name": "Get Sensor Data",
+        "func": "// Generate realistic sensor data\nconst data = {\n    type: 'sensor_data',\n    temperatura: 22 + (Math.random() * 6 - 3),  // 19-25°C\n    terra: 60 + (Math.random() * 20 - 10),     // 50-70%\n    umidita: 85 + (Math.random() * 20 - 10),   // 75-95%\n    aria: 70 + (Math.random() * 40 - 20),      // 50-90%\n    devices: {\n        ventilatori: false,\n        riscaldamento: false,\n        innaffiamento: false,\n        deumidificatore: false,\n        nebulizzatore: false,\n        evaporativi: false\n    }\n};\n\n// Check temperature thresholds\nif (data.temperatura > 25) {\n    data.devices.ventilatori = true;\n    data.devices.evaporativi = true;\n} else if (data.temperatura < 19) {\n    data.devices.riscaldamento = true;\n}\n\n// Check soil moisture thresholds\nif (data.terra < 50) {\n    data.devices.innaffiamento = true;\n} else if (data.terra > 70) {\n    data.devices.deumidificatore = true;\n}\n\n// Check air humidity threshold\nif (data.umidita < 70) {\n    data.devices.nebulizzatore = true;\n}\n\n// Format the temperature value\nconst tempValue = Number(data.temperatura.toFixed(2));\n\n// Create command with environment variable\nconst cmd = `$env:PGPASSWORD='pikachu122'; psql -U postgres -d serra_db -h localhost -c \"INSERT INTO Sensore_temp (valore_temp, data_reg_temp) VALUES (${tempValue}, CURRENT_TIMESTAMP);\" -t`;\n\nconst dbMsg = {\n    payload: cmd\n};\n\nnode.warn('Sending to database with value: ' + tempValue);\nnode.warn('Command: ' + cmd);\n\n// Send data to both WebSocket and database\nreturn [{ payload: data }, dbMsg];",
+        "outputs": 2,
+        "x": 480,
+        "y": 120,
+        "wires": [["ws-out", "debug-sensor"], ["store-data"]]
+    },
+    {
+        "id": "ws-out",
+        "type": "websocket out",
+        "z": "serra-flow",
+        "name": "WebSocket Output",
+        "server": "ws-server",
+        "client": "",
+        "x": 670,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "store-data",
+        "type": "exec",
+        "z": "serra-flow",
+        "name": "Store in PostgreSQL via psql",
+        "command": "",
+        "addpay": true,
+        "append": "",
+        "useSpawn": "false",
+        "timer": "",
+        "winHide": false,
+        "oldrc": false,
+        "x": 670,
+        "y": 180,
+        "wires": [["handle-db-response"], [], []]
+    },
+    {
+        "id": "handle-db-response",
+        "type": "function",
+        "z": "serra-flow",
+        "name": "Handle DB Response",
+        "func": "if (msg.error) {\n    node.error('Database error: ' + msg.error);\n    if (msg.payload) {\n        node.error('Error details: ' + msg.payload);\n    }\n} else {\n    node.warn('Database response: ' + JSON.stringify(msg));\n}\nreturn msg;",
+        "outputs": 1,
+        "x": 870,
+        "y": 180,
+        "wires": [["debug-db-response"]]
+    },
+    {
+        "id": "handle-other",
+        "type": "debug",
+        "z": "serra-flow",
+        "name": "Debug Other Messages",
+        "active": true,
+        "x": 480,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "debug-sensor",
+        "type": "debug",
+        "z": "serra-flow",
+        "name": "Debug Sensor Data",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 670,
+        "y": 80,
+        "wires": []
+    },
+    {
+        "id": "debug-db-response",
+        "type": "debug",
+        "z": "serra-flow",
+        "name": "Debug DB Response",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 1070,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "ws-server",
+        "type": "websocket-listener",
+        "path": "/ws/echo",
+        "wholemsg": "false"
+    },
+    {
+        "id": "serra_db",
+        "type": "postgresdb",
+        "name": "serra_db",
+        "hostname": "localhost",
+        "port": "5432",
+        "db": "serra_db",
+        "ssl": false,
+        "user": "postgres",
+        "password": "pikachu122"
+    }
+] 

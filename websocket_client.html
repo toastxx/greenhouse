@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Serra Digitale - Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+            background-color: #f0f2f5;
+        }
+        .container {
+            border: 1px solid #ccc;
+            padding: 20px;
+            border-radius: 8px;
+            background-color: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .sensor-card {
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 8px;
+            background-color: white;
+        }
+        .sensor-value {
+            font-size: 24px;
+            font-weight: bold;
+            margin: 10px 0;
+            color: #2196F3;
+        }
+        .alert {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            display: none;
+        }
+        .alert-danger {
+            background-color: #f44336;
+            color: white;
+        }
+        .alert-warning {
+            background-color: #ff9800;
+            color: white;
+        }
+        .alert-success {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .connected {
+            background-color: #dff0d8;
+            color: #3c763d;
+        }
+        .disconnected {
+            background-color: #f2dede;
+            color: #a94442;
+        }
+        .device-status {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .device-on {
+            background-color: #4CAF50;
+        }
+        .device-off {
+            background-color: #f44336;
+        }
+        .devices-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .device-card {
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        #messageOutput {
+            border: 1px solid #ddd;
+            padding: 10px;
+            height: 200px;
+            overflow-y: auto;
+            margin: 10px 0;
+            background-color: #f9f9f9;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Serra Digitale - Dashboard</h2>
+        
+        <div class="server-config">
+            <input type="text" id="serverUrl" value="ws://localhost:1880/ws/echo" placeholder="WebSocket Server URL">
+            <button onclick="connectToServer()">Connect</button>
+            <button onclick="disconnectFromServer()">Disconnect</button>
+        </div>
+
+        <div id="connectionStatus" class="status disconnected">Disconnected</div>
+
+        <div class="grid-container">
+            <div class="sensor-card">
+                <h3>Temperatura</h3>
+                <div class="sensor-value" id="tempValue">-- °C</div>
+                <div class="alert alert-danger" id="tempAlert"></div>
+            </div>
+            <div class="sensor-card">
+                <h3>Umidità Terra</h3>
+                <div class="sensor-value" id="terraValue">--%</div>
+                <div class="alert alert-danger" id="terraAlert"></div>
+            </div>
+            <div class="sensor-card">
+                <h3>Umidità Aria</h3>
+                <div class="sensor-value" id="umiditaValue">--%</div>
+                <div class="alert alert-danger" id="umiditaAlert"></div>
+            </div>
+            <div class="sensor-card">
+                <h3>Qualità Aria</h3>
+                <div class="sensor-value" id="ariaValue">--%</div>
+                <div id="ariaQuality">--</div>
+                <div class="alert alert-danger" id="ariaAlert"></div>
+            </div>
+        </div>
+
+        <h3>Stato Dispositivi</h3>
+        <div class="devices-grid">
+            <div class="device-card">
+                <div class="device-status device-off" id="ventilatori-status"></div>
+                <span>Ventilatori</span>
+            </div>
+            <div class="device-card">
+                <div class="device-status device-off" id="riscaldamento-status"></div>
+                <span>Riscaldamento</span>
+            </div>
+            <div class="device-card">
+                <div class="device-status device-off" id="innaffiamento-status"></div>
+                <span>Innaffiamento</span>
+            </div>
+            <div class="device-card">
+                <div class="device-status device-off" id="deumidificatore-status"></div>
+                <span>Deumidificatore</span>
+            </div>
+            <div class="device-card">
+                <div class="device-status device-off" id="nebulizzatore-status"></div>
+                <span>Nebulizzatore</span>
+            </div>
+            <div class="device-card">
+                <div class="device-status device-off" id="evaporativi-status"></div>
+                <span>Pannelli Evaporativi</span>
+            </div>
+        </div>
+
+        <h3>Log Sistema:</h3>
+        <div id="messageOutput"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        let autoReconnect = true;
+
+        // Thresholds
+        const THRESHOLDS = {
+            temperatura: { min: 10, max: 25 },
+            terra: { min: 50, max: 70 },
+            umidita: { min: 70, max: 100 },
+            aria: { min: 41 } // Minimo per "Ok"
+        };
+
+        function connectToServer() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            console.log('Attempting to connect to:', serverUrl);
+            autoReconnect = true;
+            connect(serverUrl);
+        }
+
+        function disconnectFromServer() {
+            console.log('Disconnecting from server');
+            autoReconnect = false;
+            if (ws) {
+                ws.close();
+            }
+        }
+
+        function connect(serverUrl) {
+            if (ws) {
+                ws.close();
+            }
+
+            try {
+                console.log('Creating new WebSocket connection...');
+                ws = new WebSocket(serverUrl);
+
+                ws.onopen = function() {
+                    console.log('WebSocket connection established');
+                    document.getElementById('connectionStatus').className = 'status connected';
+                    document.getElementById('connectionStatus').textContent = 'Connected to ' + serverUrl;
+                    reconnectAttempts = 0;
+                    appendMessage('Connected to server', 'system');
+                    // Request initial data
+                    requestSensorData();
+                };
+
+                ws.onclose = function() {
+                    console.log('WebSocket connection closed');
+                    document.getElementById('connectionStatus').className = 'status disconnected';
+                    document.getElementById('connectionStatus').textContent = 'Disconnected';
+                    appendMessage('Disconnected from server', 'system');
+                    
+                    if (autoReconnect && reconnectAttempts < maxReconnectAttempts) {
+                        reconnectAttempts++;
+                        console.log(`Attempting reconnect ${reconnectAttempts}/${maxReconnectAttempts}`);
+                        appendMessage(`Reconnecting... Attempt ${reconnectAttempts}/${maxReconnectAttempts}`, 'system');
+                        setTimeout(() => connect(serverUrl), 2000);
+                    }
+                };
+
+                ws.onerror = function(error) {
+                    console.error('WebSocket Error:', error);
+                    appendMessage('WebSocket Error', 'error');
+                };
+
+                ws.onmessage = function(event) {
+                    try {
+                        console.log('Raw WebSocket message:', event.data);
+                        appendMessage('Received data: ' + event.data, 'system');
+                        
+                        const data = JSON.parse(event.data);
+                        console.log('Parsed data:', data);
+                        
+                        // Handle both direct data and payload-wrapped data
+                        const sensorData = data.payload || data;
+                        handleSensorData(sensorData);
+                    } catch (e) {
+                        console.error('WebSocket message error:', e);
+                        appendMessage('Error parsing message: ' + e.message, 'error');
+                    }
+                };
+            } catch (error) {
+                console.error('Error creating WebSocket:', error);
+                appendMessage('Error connecting to server: ' + error.message, 'error');
+            }
+        }
+
+        function requestSensorData() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                console.log('Requesting sensor data...');
+                const request = {
+                    type: 'request_sensor_data',
+                    payload: { type: 'request_sensor_data' }
+                };
+                console.log('Sending request:', request);
+                ws.send(JSON.stringify(request));
+            } else {
+                console.warn('Cannot request data - WebSocket not open');
+            }
+        }
+
+        function handleSensorData(data) {
+            console.log('Handling sensor data:', data);
+            updateSensorDisplay(data);
+            checkThresholds(data);
+            updateDeviceStatus(data.devices);
+        }
+
+        function updateSensorDisplay(data) {
+            if (data.temperatura !== undefined) {
+                document.getElementById('tempValue').textContent = `${data.temperatura.toFixed(1)} °C`;
+            }
+            if (data.terra !== undefined) {
+                document.getElementById('terraValue').textContent = `${data.terra.toFixed(1)}%`;
+            }
+            if (data.umidita !== undefined) {
+                document.getElementById('umiditaValue').textContent = `${data.umidita.toFixed(1)}%`;
+            }
+            if (data.aria !== undefined) {
+                document.getElementById('ariaValue').textContent = `${data.aria.toFixed(1)}%`;
+                document.getElementById('ariaQuality').textContent = getAirQuality(data.aria);
+            }
+        }
+
+        function getAirQuality(value) {
+            if (value >= 81) return 'Ottima';
+            if (value >= 61) return 'Buona';
+            if (value >= 41) return 'Ok';
+            if (value >= 21) return 'Scarsa';
+            return 'Pericolo';
+        }
+
+        function checkThresholds(data) {
+            // Temperature check
+            if (data.temperatura !== undefined) {
+                const tempAlert = document.getElementById('tempAlert');
+                if (data.temperatura < THRESHOLDS.temperatura.min) {
+                    showAlert(tempAlert, `Temperatura troppo bassa: ${data.temperatura}°C`);
+                } else if (data.temperatura > THRESHOLDS.temperatura.max) {
+                    showAlert(tempAlert, `Temperatura troppo alta: ${data.temperatura}°C`);
+                } else {
+                    hideAlert(tempAlert);
+                }
+            }
+
+            // Soil moisture check
+            if (data.terra !== undefined) {
+                const terraAlert = document.getElementById('terraAlert');
+                if (data.terra < THRESHOLDS.terra.min) {
+                    showAlert(terraAlert, `Umidità terra troppo bassa: ${data.terra}%`);
+                } else if (data.terra > THRESHOLDS.terra.max) {
+                    showAlert(terraAlert, `Umidità terra troppo alta: ${data.terra}%`);
+                } else {
+                    hideAlert(terraAlert);
+                }
+            }
+
+            // Air humidity check
+            if (data.umidita !== undefined) {
+                const umiditaAlert = document.getElementById('umiditaAlert');
+                if (data.umidita < THRESHOLDS.umidita.min) {
+                    showAlert(umiditaAlert, `Umidità aria troppo bassa: ${data.umidita}%`);
+                } else if (data.umidita > THRESHOLDS.umidita.max) {
+                    showAlert(umiditaAlert, `Umidità aria troppo alta: ${data.umidita}%`);
+                } else {
+                    hideAlert(umiditaAlert);
+                }
+            }
+
+            // Air quality check
+            if (data.aria !== undefined) {
+                const ariaAlert = document.getElementById('ariaAlert');
+                if (data.aria < THRESHOLDS.aria.min) {
+                    showAlert(ariaAlert, `Qualità aria insufficiente: ${data.aria}%`);
+                } else {
+                    hideAlert(ariaAlert);
+                }
+            }
+        }
+
+        function showAlert(element, message) {
+            element.textContent = message;
+            element.style.display = 'block';
+        }
+
+        function hideAlert(element) {
+            element.style.display = 'none';
+        }
+
+        function updateDeviceStatus(devices) {
+            if (!devices) return;
+            
+            const deviceIds = [
+                'ventilatori', 'riscaldamento', 'innaffiamento',
+                'deumidificatore', 'nebulizzatore', 'evaporativi'
+            ];
+
+            deviceIds.forEach(id => {
+                const element = document.getElementById(`${id}-status`);
+                if (element && devices[id] !== undefined) {
+                    element.className = `device-status device-${devices[id] ? 'on' : 'off'}`;
+                }
+            });
+        }
+
+        function appendMessage(message, type) {
+            const messageOutput = document.getElementById('messageOutput');
+            const messageElement = document.createElement('div');
+            messageElement.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            
+            switch(type) {
+                case 'error':
+                    messageElement.style.color = '#f44336';
+                    break;
+                case 'system':
+                    messageElement.style.color = '#9e9e9e';
+                    break;
+                case 'alert':
+                    messageElement.style.color = '#ff9800';
+                    break;
+                default:
+                    messageElement.style.color = '#4CAF50';
+            }
+            
+            messageOutput.appendChild(messageElement);
+            messageOutput.scrollTop = messageOutput.scrollHeight;
+        }
+
+        // Connect when the page loads
+        connectToServer();
+
+        // Request sensor data every 15 seconds instead of 5
+        setInterval(requestSensorData, 15000);
+    </script>
+</body>
+</html> 
